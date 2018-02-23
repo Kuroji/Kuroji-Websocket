@@ -1,6 +1,7 @@
 package xyz.astolfo.websocket
 
 import com.github.salomonbrys.kotson.fromJson
+import com.github.salomonbrys.kotson.jsonArray
 import com.github.salomonbrys.kotson.jsonObject
 import com.google.gson.Gson
 import com.google.gson.JsonElement
@@ -14,7 +15,8 @@ import org.springframework.boot.SpringApplication
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.context.annotation.Bean
 import java.io.ByteArrayOutputStream
-import java.io.IOException
+import java.util.*
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.zip.Inflater
 import java.util.zip.InflaterOutputStream
@@ -22,11 +24,7 @@ import java.util.zip.InflaterOutputStream
 @SpringBootApplication
 class WebsocketApp {
     @Bean
-    fun startWebSocket() = DiscordWebsocket(
-            System.getenv("token")
-            , { eventName, data ->
-        //println("SENDING>> EVENT: $eventName DATA: $data")
-    })
+    fun startWebSocket() = ShardManager(0 until 2, 2, System.getenv("token"))
 }
 
 fun main(args: Array<String>) {
@@ -51,13 +49,42 @@ enum class Opcode {
     HEARTBEAT_ACK
 }
 
+class ShardManager(shardRangeIds: IntRange,
+                   val total: Int,
+                   private val botToken: String) {
+
+    val shardRange = IntRange(shardRangeIds.start.coerceAtLeast(0),
+            shardRangeIds.last.coerceAtMost(total - 1))
+    private val connectQueue = ArrayDeque<Int>()
+
+    private val shard = mutableMapOf<Int, DiscordWebsocket>()
+
+    private val scheduler = Executors.newSingleThreadScheduledExecutor()
+
+    init {
+        shardRange.forEach { id ->
+            shard[id] = DiscordWebsocket(botToken, id, total, { event, data ->
+                println("[GET] [$id] [$event] $data")
+            }, connectQueue)
+        }
+        scheduler.scheduleWithFixedDelay({
+            val shardId = connectQueue.poll() ?: return@scheduleWithFixedDelay
+            println("Starting Shard: $shardId")
+            shard[shardId]!!.connect()
+        }, 0, 6, TimeUnit.SECONDS)
+    }
+}
+
 class DiscordWebsocket(private val botToken: String,
-                       private val eventConsumer: (String, String) -> Unit) : WebSocketListener() {
+                       val id: Int,
+                       val total: Int,
+                       private val eventConsumer: (String, String) -> Unit,
+                       private val connectQueue: Queue<Int>) : WebSocketListener() {
 
     private val gatewayRequest = Request.Builder().url("wss://gateway.discord.gg/?v=6&encoding=json&compress=zlib-stream").build()
     private val okHttpClient = OkHttpClient()
     private val gson = Gson()
-    private val inflater = Inflater()
+    private lateinit var inflater: Inflater
     private lateinit var webSocket: WebSocket
     private val heartbeatChecker = HeartbeatChecker({
         send(Opcode.HEARTBEAT, JsonPrimitive(lastSequence))
@@ -66,38 +93,41 @@ class DiscordWebsocket(private val botToken: String,
     private var sessionId = ""
 
     init {
-        connect()
+        queueConnect()
     }
 
-    private fun connect() {
+    private fun queueConnect() {
+        connectQueue.add(id)
+    }
+
+    fun connect() {
         webSocket = okHttpClient.newWebSocket(gatewayRequest, this)
     }
 
     private fun reconnect() {
         launch {
             webSocket.close(1000, "Reconnect")
-            connect()
+            queueConnect()
         }
     }
 
-    override fun onMessage(webSocket: WebSocket?, bytes: ByteString?) {
-        val byteArray = bytes!!.toByteArray()
-
-        try {
-            val out = ByteArrayOutputStream(byteArray.size * 2)
-            InflaterOutputStream(out, inflater).use {
-                it.write(byteArray)
-            }
-            onMessage(webSocket, out.toString("UTF-8"))
-        } catch (e: IOException) {
-            e.printStackTrace()
-        }
+    override fun onOpen(webSocket: WebSocket?, response: Response?) {
+        inflater = Inflater()
     }
 
-    override fun onMessage(webSocket: WebSocket?, text: String?) {
+    override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+        val byteArray = bytes.toByteArray()
+
+        val out = ByteArrayOutputStream(byteArray.size * 2)
+        InflaterOutputStream(out, inflater).use {
+            it.write(byteArray)
+        }
+        onMessage(webSocket, out.toString("UTF-8"))
+    }
+
+    override fun onMessage(webSocket: WebSocket, text: String) {
         try {
-            println(text)
-            val json = gson.fromJson<JsonObject>(text!!)
+            val json = gson.fromJson<JsonObject>(text)
 
             json["s"]?.takeIf { !it.isJsonNull }?.asLong?.let { lastSequence = it }
 
@@ -131,13 +161,14 @@ class DiscordWebsocket(private val botToken: String,
                 else -> TODO("incoming Opcode ${opcode.name} isn't supported yet!")
             }
         } catch (e: Exception) {
-            println(text)
+            println("[GET] [$id] $text")
             throw e
         }
     }
 
     override fun onFailure(webSocket: WebSocket?, t: Throwable?, response: Response?) {
         t?.printStackTrace()
+        reconnect()
     }
 
     override fun onClosed(webSocket: WebSocket?, code: Int, reason: String?) {
@@ -149,7 +180,7 @@ class DiscordWebsocket(private val botToken: String,
             4009 -> launch {
                 // Invalid session
                 sessionId = ""
-                connect()
+                queueConnect()
             }
             1000 -> println("Session closed by bot")
         }
@@ -159,7 +190,9 @@ class DiscordWebsocket(private val botToken: String,
             webSocket.send(jsonObject(
                     "op" to op.ordinal,
                     "d" to d
-            ).toString())
+            ).toString().apply {
+                println("[SEND] [$id] $this")
+            })
 
     private fun identify() {
         if (sessionId.isNotBlank())
@@ -175,7 +208,17 @@ class DiscordWebsocket(private val botToken: String,
                                     "\$referring_domain" to "",
                                     "\$referrer" to ""
                             ),
-                            "compress" to false,
+                            "presence" to jsonObject(
+                                    "game" to jsonObject(
+                                            "name" to "Astolfo 2.0 Testing",
+                                            "type" to 0
+                                    ),
+                                    "status" to "online",
+                                    "since" to 0,
+                                    "afk" to false
+                            ),
+                            "shard" to jsonArray(id, total),
+                            "compress" to true,
                             "large_threshold" to 250,
                             "v" to 6
                     ))

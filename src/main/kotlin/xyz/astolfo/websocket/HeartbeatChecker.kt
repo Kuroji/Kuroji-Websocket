@@ -3,10 +3,8 @@ package xyz.astolfo.websocket
 import kotlinx.coroutines.experimental.Job
 import kotlinx.coroutines.experimental.delay
 import kotlinx.coroutines.experimental.launch
+import kotlinx.coroutines.experimental.newFixedThreadPoolContext
 import org.slf4j.LoggerFactory
-import java.util.concurrent.Future
-import java.util.concurrent.ScheduledExecutorService
-import java.util.concurrent.TimeUnit
 
 /**
  * Helpful class for managing Discord Websocket Heartbeats and making sure its still alive
@@ -17,6 +15,8 @@ import java.util.concurrent.TimeUnit
  */
 internal class HeartbeatChecker(private val sendBeat: () -> Unit,
                                 private val onDeath: () -> Unit) {
+
+    private val heartbeatThreadContext = newFixedThreadPoolContext(2, "Heartbeat Checker")
 
     private var beatRate: Long = 0
 
@@ -70,7 +70,7 @@ internal class HeartbeatChecker(private val sendBeat: () -> Unit,
     private fun newBeat() {
         if (!shouldBeat) return
         log.debug("Scheduled new heartbeat to happen in {}ms", beatRate)
-        heartbeatTask = launch {
+        heartbeatTask = launch(heartbeatThreadContext) {
             delay(beatRate)
             beat()
         }
@@ -82,7 +82,7 @@ internal class HeartbeatChecker(private val sendBeat: () -> Unit,
     private fun beat() {
         sentBeat = System.currentTimeMillis()
         log.debug("Heartbeat started at {}ms", sentBeat)
-        heartbeatCheckerTask = launch {
+        heartbeatCheckerTask = launch(heartbeatThreadContext) {
             delay(beatRate / 2L)
             onDeath.invoke()
         }

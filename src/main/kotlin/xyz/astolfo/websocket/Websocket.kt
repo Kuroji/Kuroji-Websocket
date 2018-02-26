@@ -7,16 +7,18 @@ import com.google.gson.Gson
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonPrimitive
+import kotlinx.coroutines.experimental.channels.Channel
 import kotlinx.coroutines.experimental.delay
 import kotlinx.coroutines.experimental.launch
+import kotlinx.coroutines.experimental.newSingleThreadContext
+import kotlinx.coroutines.experimental.runBlocking
 import okhttp3.*
 import okio.ByteString
+import org.slf4j.LoggerFactory
 import org.springframework.boot.SpringApplication
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.context.annotation.Bean
 import java.io.ByteArrayOutputStream
-import java.util.*
-import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.zip.Inflater
 import java.util.zip.InflaterOutputStream
@@ -24,7 +26,7 @@ import java.util.zip.InflaterOutputStream
 @SpringBootApplication
 class WebsocketApp {
     @Bean
-    fun startWebSocket() = ShardManager(0 until 2, 2, System.getenv("token"))
+    fun startWebSocket() = ShardManager(0..1, 2, System.getenv("token"))
 }
 
 fun main(args: Array<String>) {
@@ -50,28 +52,34 @@ enum class Opcode {
 }
 
 class ShardManager(shardRangeIds: IntRange,
-                   val total: Int,
-                   private val botToken: String) {
+                   total: Int,
+                   botToken: String) {
 
-    val shardRange = IntRange(shardRangeIds.start.coerceAtLeast(0),
-            shardRangeIds.last.coerceAtMost(total - 1))
-    private val connectQueue = ArrayDeque<Int>()
-
-    private val shard = mutableMapOf<Int, DiscordWebsocket>()
-
-    private val scheduler = Executors.newSingleThreadScheduledExecutor()
+    companion object {
+        private val log = LoggerFactory.getLogger(ShardManager::class.java)
+    }
 
     init {
-        shardRange.forEach { id ->
+        if (shardRangeIds.first < 0) throw IllegalArgumentException("First shard cannot be less then 0!")
+        if (shardRangeIds.last >= total) throw  IllegalArgumentException("Last shard cannot be equal or greater then total!")
+
+        val shard = mutableMapOf<Int, DiscordWebsocket>()
+        val queue = Channel<Int>(50)
+        shardRangeIds.forEach { id ->
             shard[id] = DiscordWebsocket(botToken, id, total, { event, data ->
-                println("[GET] [$id] [$event] $data")
-            }, connectQueue)
+                //println("[GET] [$id] [$event] $data")
+            }, queue)
         }
-        scheduler.scheduleWithFixedDelay({
-            val shardId = connectQueue.poll() ?: return@scheduleWithFixedDelay
-            println("Starting Shard: $shardId")
-            shard[shardId]!!.connect()
-        }, 0, 6, TimeUnit.SECONDS)
+        launch(newSingleThreadContext("Connect Queue")) {
+            while (isActive) {
+                val shardId = queue.receive()
+                //get lock from zookeeper
+                log.info("Starting Shard: $shardId/$total")
+                shard[shardId]!!.connect()
+                delay(6, TimeUnit.SECONDS)
+                //release lock from zookeeper
+            }
+        }
     }
 }
 
@@ -79,11 +87,17 @@ class DiscordWebsocket(private val botToken: String,
                        val id: Int,
                        val total: Int,
                        private val eventConsumer: (String, String) -> Unit,
-                       private val connectQueue: Queue<Int>) : WebSocketListener() {
+                       private val connectQueue: Channel<Int>) : WebSocketListener() {
 
-    private val gatewayRequest = Request.Builder().url("wss://gateway.discord.gg/?v=6&encoding=json&compress=zlib-stream").build()
-    private val okHttpClient = OkHttpClient()
-    private val gson = Gson()
+    companion object {
+        private val log = LoggerFactory.getLogger(DiscordWebsocket::class.java)
+        private val gatewayRequest = Request.Builder().url("wss://gateway.discord.gg/?v=6&encoding=json&compress=zlib-stream").build()
+        private val okHttpClient = OkHttpClient()
+        private val gson = Gson()
+    }
+
+    private val webSocketContext = newSingleThreadContext("Discord Websocket")
+
     private lateinit var inflater: Inflater
     private lateinit var webSocket: WebSocket
     private val heartbeatChecker = HeartbeatChecker({
@@ -93,25 +107,27 @@ class DiscordWebsocket(private val botToken: String,
     private var sessionId = ""
 
     init {
-        queueConnect()
+        runBlocking(webSocketContext) {
+            queueConnect()
+        }
     }
 
-    private fun queueConnect() {
-        connectQueue.add(id)
-    }
+    private suspend fun queueConnect() = connectQueue.send(id)
 
     fun connect() {
         webSocket = okHttpClient.newWebSocket(gatewayRequest, this)
     }
 
     private fun reconnect() {
-        launch {
+        launch(webSocketContext) {
+            log.info("Reconnecting shard $id to Websocket!")
             webSocket.close(1000, "Reconnect")
             queueConnect()
         }
     }
 
-    override fun onOpen(webSocket: WebSocket?, response: Response?) {
+    override fun onOpen(webSocket: WebSocket, response: Response) {
+        log.info("Shard $id connected to Websocket!")
         inflater = Inflater()
     }
 
@@ -126,63 +142,63 @@ class DiscordWebsocket(private val botToken: String,
     }
 
     override fun onMessage(webSocket: WebSocket, text: String) {
-        try {
-            val json = gson.fromJson<JsonObject>(text)
+        val json = gson.fromJson<JsonObject>(text)
 
-            json["s"]?.takeIf { !it.isJsonNull }?.asLong?.let { lastSequence = it }
+        json["s"]?.takeIf { !it.isJsonNull }?.asLong?.let { lastSequence = it }
 
-            val data = json["d"]?.takeIf { it.isJsonObject }?.asJsonObject
-            val opcode = Opcode.values()[json["op"].asInt]
-            when (opcode) {
-                Opcode.HELLO -> {
-                    identify()
+        val data = json["d"]?.takeIf { it.isJsonObject }?.asJsonObject
+        val opcode = Opcode.values()[json["op"].asInt]
+        if (opcode != Opcode.DISPATCH)
+            log.debug("[GET] [$id] $text")
+        when (opcode) {
+            Opcode.HELLO -> {
+                identify()
 
-                    val interval = data!!["heartbeat_interval"].asLong
-                    heartbeatChecker.startHeartbeat(interval)
-                }
-                Opcode.INVALID_SESSION -> {
-                    val valid = json["d"].asBoolean
-                    launch {
-                        delay(5, TimeUnit.SECONDS)
-                        when (valid) {
-                            true -> identify()
-                            false -> resume()
-                        }
+                val interval = data!!["heartbeat_interval"].asLong
+                heartbeatChecker.startHeartbeat(interval)
+            }
+            Opcode.INVALID_SESSION -> {
+                val valid = json["d"].asBoolean
+                launch(webSocketContext) {
+                    delay(5, TimeUnit.SECONDS)
+                    when (valid) {
+                        true -> identify()
+                        false -> resume()
                     }
                 }
-                Opcode.HEARTBEAT_ACK -> heartbeatChecker.consumeBeat()
-                Opcode.DISPATCH -> {
-                    val event = json["t"].asString
-                    if (event == "READY")
-                        sessionId = data!!["session_id"].asString
-                    eventConsumer.invoke(event, data.toString())
-                }
-                Opcode.RECONNECT -> reconnect()
-                else -> TODO("incoming Opcode ${opcode.name} isn't supported yet!")
             }
-        } catch (e: Exception) {
-            println("[GET] [$id] $text")
-            throw e
+            Opcode.HEARTBEAT_ACK -> heartbeatChecker.consumeBeat()
+            Opcode.DISPATCH -> {
+                val event = json["t"].asString
+                if (event == "READY")
+                    sessionId = data!!["session_id"].asString
+                eventConsumer.invoke(event, data.toString())
+            }
+            Opcode.RECONNECT -> reconnect()
+            else -> TODO("incoming Opcode ${opcode.name} isn't supported yet!")
         }
     }
 
-    override fun onFailure(webSocket: WebSocket?, t: Throwable?, response: Response?) {
-        t?.printStackTrace()
+    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+        log.error("Error in Websocket", t)
+        heartbeatChecker.stop()
         reconnect()
     }
 
-    override fun onClosed(webSocket: WebSocket?, code: Int, reason: String?) {
+    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+        log.info("Websocket on shard $id closed! CODE: $code REASON: $reason")
         heartbeatChecker.stop()
         when (code) {
             4004 -> error("Tried to connect with an invalid token")
             4010 -> error("Invalid sharding data, check your client options")
             4011 -> error("Shard would be on over 2500 guilds. Add more shards")
-            4009 -> launch {
+            4009 -> launch(webSocketContext) {
                 // Invalid session
                 sessionId = ""
                 queueConnect()
             }
             1000 -> println("Session closed by bot")
+            else -> error("Unknown Close: Code: $code REASON: $reason")
         }
     }
 
@@ -191,37 +207,35 @@ class DiscordWebsocket(private val botToken: String,
                     "op" to op.ordinal,
                     "d" to d
             ).toString().apply {
-                println("[SEND] [$id] $this")
+                log.debug("[SEND] [$id] $this")
             })
 
     private fun identify() {
-        if (sessionId.isNotBlank())
-            resume()
-        else
-            send(Opcode.IDENTIFY,
-                    jsonObject(
-                            "token" to botToken,
-                            "properties" to jsonObject(
-                                    "\$os" to System.getProperty("os.name"),
-                                    "\$browser" to "Astolfo",
-                                    "\$device" to "Astolfo",
-                                    "\$referring_domain" to "",
-                                    "\$referrer" to ""
-                            ),
-                            "presence" to jsonObject(
-                                    "game" to jsonObject(
-                                            "name" to "Astolfo 2.0 Testing",
-                                            "type" to 0
-                                    ),
-                                    "status" to "online",
-                                    "since" to 0,
-                                    "afk" to false
-                            ),
-                            "shard" to jsonArray(id, total),
-                            "compress" to true,
-                            "large_threshold" to 250,
-                            "v" to 6
-                    ))
+        if (sessionId.isNotBlank()) resume()
+        else send(Opcode.IDENTIFY,
+                jsonObject(
+                        "token" to botToken,
+                        "properties" to jsonObject(
+                                "\$os" to System.getProperty("os.name"),
+                                "\$browser" to "Astolfo",
+                                "\$device" to "Astolfo",
+                                "\$referring_domain" to "",
+                                "\$referrer" to ""
+                        ),
+                        "presence" to jsonObject(
+                                "game" to jsonObject(
+                                        "name" to "Astolfo 2.0 Testing",
+                                        "type" to 0
+                                ),
+                                "status" to "online",
+                                "since" to 0,
+                                "afk" to false
+                        ),
+                        "shard" to jsonArray(id, total),
+                        "compress" to true,
+                        "large_threshold" to 250,
+                        "v" to 6
+                ))
     }
 
     private fun resume() {

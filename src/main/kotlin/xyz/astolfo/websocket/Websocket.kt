@@ -163,8 +163,10 @@ class DiscordWebsocket(private val botToken: String,
                     delay(5, TimeUnit.SECONDS)
                     if(valid)
                         resume()
-                    else
+                    else {
+                        sessionId = ""
                         identify()
+                    }
                 }
             }
             Opcode.HEARTBEAT_ACK -> heartbeatChecker.consumeBeat()

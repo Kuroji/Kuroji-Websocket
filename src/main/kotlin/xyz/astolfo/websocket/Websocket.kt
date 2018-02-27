@@ -161,10 +161,10 @@ class DiscordWebsocket(private val botToken: String,
                 val valid = json["d"].asBoolean
                 launch(webSocketContext) {
                     delay(5, TimeUnit.SECONDS)
-                    when (valid) {
-                        true -> identify()
-                        false -> resume()
-                    }
+                    if(valid)
+                        resume()
+                    else
+                        identify()
                 }
             }
             Opcode.HEARTBEAT_ACK -> heartbeatChecker.consumeBeat()

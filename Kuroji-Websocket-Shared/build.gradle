@@ -1,0 +1,55 @@
+buildscript {
+    repositories {
+        jcenter()
+    }
+    dependencies {
+        classpath 'com.google.protobuf:protobuf-gradle-plugin:0.8.3'
+    }
+}
+
+group 'xyz.astolfo'
+version '0.0.1'
+
+apply plugin: 'com.google.protobuf'
+apply plugin: 'java'
+
+repositories {
+    jcenter()
+    maven { url 'https://jitpack.io' }
+
+}
+
+dependencies {
+    compile group: 'com.google.protobuf', name: 'protobuf-java', version: '3.5.0'
+    compile 'io.grpc:grpc-netty:1.10.0'
+    compile 'io.grpc:grpc-protobuf:1.10.0'
+    compile 'io.grpc:grpc-stub:1.10.0'
+
+    compile 'com.github.Kuroji:Kuroji-Protocord:f80dd7549d'
+    //apiElements 'com.github.Kuroji:Kuroji-Protocord:f80dd7549d'
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs += file ("${protobuf.generatedFilesBaseDir}/main/grpc")
+            srcDirs += file ("${protobuf.generatedFilesBaseDir}/main/java")
+        }
+    }
+}
+
+protobuf {
+    protoc {
+        artifact = "com.google.protobuf:protoc:3.5.1-1"
+    }
+    plugins {
+        grpc {
+            artifact = 'io.grpc:protoc-gen-grpc-java:1.10.0'
+        }
+    }
+    generateProtoTasks {
+        all()*.plugins {
+            grpc {}
+        }
+    }
+}

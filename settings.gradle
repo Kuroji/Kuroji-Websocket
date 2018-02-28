@@ -12,3 +12,7 @@ rootProject.name = 'Kuroji-Websocket'
 include 'kuroji-websocket-shared'
 include 'kuroji-websocket-client'
 include 'kuroji-websocket-server'
+
+project(":kuroji-websocket-shared").projectDir = "$rootDir/Kuroji-Websocket-Shared" as File
+project(":kuroji-websocket-server").projectDir = "$rootDir/Kuroji-Websocket-Server" as File
+project(":kuroji-websocket-client").projectDir = "$rootDir/Kuroji-Websocket-Client" as File

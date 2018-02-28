@@ -15,6 +15,7 @@ import kotlinx.coroutines.experimental.runBlocking
 import okhttp3.*
 import okio.ByteString
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.SpringApplication
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.context.annotation.Bean
@@ -26,7 +27,7 @@ import java.util.zip.InflaterOutputStream
 @SpringBootApplication
 class WebsocketApp {
     @Bean
-    fun startWebSocket() = ShardManager(0..1, 2, System.getenv("token"))
+    fun startWebSocket(@Value("\${token}")token: String) = ShardManager(0..1, 2, token)
 }
 
 fun main(args: Array<String>) {
@@ -34,6 +35,8 @@ fun main(args: Array<String>) {
     app.isWebEnvironment = false
     app.setLogStartupInfo(false)
     app.run(*args)
+    //val manager = ShardManager(0..0, 1, args[0])
+
 }
 
 enum class Opcode {

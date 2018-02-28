@@ -30,8 +30,8 @@ dependencies {
     compile 'org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:0.22.2'
     compile 'com.github.salomonbrys.kotson:kotson:2.5.0'
     compile "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
-    //compile 'com.github.Kuroji.Kuroji-Websocket:kuroji-websocket-shared:grpc-dev-SNAPSHOT'
-    compile project(":kuroji-websocket-shared")
+    compile 'com.github.Kuroji.Kuroji-Websocket:kuroji-websocket-shared:grpc-dev-SNAPSHOT'
+    //compile project(":kuroji-websocket-shared")
 }
 
 compileKotlin {

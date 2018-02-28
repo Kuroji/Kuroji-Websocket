@@ -1,0 +1,5 @@
+rootProject.name = "Kuroji-Websocket-Server"
+
+include ':kuroji-websocket-shared'
+project(":kuroji-websocket-shared").projectDir = "$rootDir/../Kuroji-Websocket-Shared" as File
+

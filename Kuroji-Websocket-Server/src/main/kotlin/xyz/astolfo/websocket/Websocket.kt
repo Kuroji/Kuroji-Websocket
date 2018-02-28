@@ -19,6 +19,7 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.SpringApplication
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.context.annotation.Bean
+import xyz.astolfo.websocket.rpc.RPCClient
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
 import java.util.zip.Inflater
@@ -61,17 +62,18 @@ class ShardManager(shardRangeIds: IntRange,
     companion object {
         private val log = LoggerFactory.getLogger(ShardManager::class.java)
     }
-
+    val rpcSendingThingy : RPCClient
     init {
         if (shardRangeIds.first < 0) throw IllegalArgumentException("First shard cannot be less then 0!")
         if (shardRangeIds.last >= total) throw  IllegalArgumentException("Last shard cannot be equal or greater then total!")
 
         val shard = mutableMapOf<Int, DiscordWebsocket>()
         val queue = Channel<Int>(50)
+        //TODO don't hardcode the address... but I'm lazy for now
+        rpcSendingThingy = RPCClient("localhost:2181")
+        rpcSendingThingy.start()
         shardRangeIds.forEach { id ->
-            shard[id] = DiscordWebsocket(botToken, id, total, { event, data ->
-                //println("[GET] [$id] [$event] $data")
-            }, queue)
+            shard[id] = DiscordWebsocket(botToken, id, total, rpcSendingThingy::sentEvent, queue)
         }
         launch(newSingleThreadContext("Connect Queue")) {
             while (isActive) {

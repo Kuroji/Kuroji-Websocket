@@ -25,8 +25,6 @@ dependencies {
     compile 'io.grpc:grpc-protobuf:1.10.0'
     compile 'io.grpc:grpc-stub:1.10.0'
 
-    compile 'com.github.Kuroji:Kuroji-Protocord:f80dd7549d'
-    //apiElements 'com.github.Kuroji:Kuroji-Protocord:f80dd7549d'
 }
 
 sourceSets {

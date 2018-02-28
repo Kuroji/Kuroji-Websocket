@@ -35,7 +35,7 @@ class TestWebsocketSubscriber : WebsocketSubscriberGrpc.WebsocketSubscriberImplB
     private val gson = GsonBuilder().setPrettyPrinting().create()
     override fun onEvent(request: KurojiWebsocket.RawEvent, responseObserver: StreamObserver<KurojiWebsocket.SubResponse>) {
         launch {
-            println(gson.toJson(request))
+            println(request)
             responseObserver.onNext(KurojiWebsocket.SubResponse.getDefaultInstance())
             responseObserver.onCompleted()
         }

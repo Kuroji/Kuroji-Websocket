@@ -20,6 +20,10 @@ repositories {
     mavenCentral()
 }
 
+configurations {
+    extraLib
+}
+
 dependencies {
     compile 'io.grpc:grpc-protobuf:1.10.0'
     compile 'org.apache.curator:curator-x-async:4.0.1'
@@ -28,7 +32,8 @@ dependencies {
     compile 'org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:0.22.2'
     compile 'com.github.salomonbrys.kotson:kotson:2.5.0'
     compile "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
-    compile project(":kuroji-websocket-shared")
+    extraLib project(":kuroji-websocket-shared")
+    configurations.compile.extendsFrom(configurations.extraLib)
 }
 
 compileKotlin {
@@ -49,5 +54,11 @@ publishing {
         mavenJava(MavenPublication) {
             from components.java
         }
+    }
+}
+
+jar {
+    from {
+        configurations.extraLib.collect { it.isDirectory() ? it : zipTree(it) }
     }
 }

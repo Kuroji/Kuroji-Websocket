@@ -7,12 +7,4 @@
 subprojects {
     apply plugin: 'maven-publish'
     apply plugin: 'java'
-
-    publishing {
-        publications {
-            mavenJava(MavenPublication) {
-                from components.java
-            }
-        }
-    }
 }

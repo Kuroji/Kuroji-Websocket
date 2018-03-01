@@ -21,6 +21,11 @@ repositories {
     maven { url 'https://jitpack.io' }
 }
 
+configurations {
+    localCompile.transitive = false
+    compile.extendsFrom(localCompile)
+    localTransitive.extendsFrom(localCompile)
+}
 
 dependencies {
     compile 'io.grpc:grpc-protobuf:1.10.0'
@@ -30,8 +35,8 @@ dependencies {
     compile 'org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:0.22.2'
     compile 'com.github.salomonbrys.kotson:kotson:2.5.0'
     compile "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
-    compile 'com.github.Kuroji.Kuroji-Websocket:kuroji-websocket-shared:grpc-dev-SNAPSHOT'
-    //compile project(":kuroji-websocket-shared")
+
+    localCompile project(":kuroji-websocket-shared")
 }
 
 compileKotlin {
@@ -47,3 +52,38 @@ kotlin {
     }
 }
 
+jar {
+    from {
+        configurations.localCompile.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            artifact jar
+            pom.withXml {
+                def dependenciesNode = asNode().appendNode('dependencies')
+
+                configurations.compile.allDependencies.stream()
+                        .filter {!configurations.localCompile.dependencies.contains(it)}
+                        .each {
+                    def dependencyNode = dependenciesNode.appendNode('dependency')
+                    dependencyNode.appendNode('groupId', it.group)
+                    dependencyNode.appendNode('artifactId', it.name)
+                    dependencyNode.appendNode('version', it.version)
+                    dependencyNode.appendNode('scope', 'compile')
+                }
+                configurations.localTransitive.resolvedConfiguration.firstLevelModuleDependencies.each {
+                    it.children.each {
+                        def dependencyNode = dependenciesNode.appendNode('dependency')
+                        dependencyNode.appendNode('groupId', it.moduleGroup)
+                        dependencyNode.appendNode('artifactId', it.moduleName)
+                        dependencyNode.appendNode('version', it.moduleVersion)
+                        dependencyNode.appendNode('scope', 'compile')
+                    }
+                }
+            }
+        }
+    }
+}

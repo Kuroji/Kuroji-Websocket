@@ -55,7 +55,7 @@ protobuf {
 publishing {
     publications {
         iHateJitpack(MavenPublication) {
-            form components.java
+            from components.java
         }
     }
 

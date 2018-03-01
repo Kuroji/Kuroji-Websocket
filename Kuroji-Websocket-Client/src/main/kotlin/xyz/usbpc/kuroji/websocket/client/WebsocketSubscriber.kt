@@ -12,17 +12,9 @@ import xyz.astolfo.websocket.rpc.KurojiWebsocket
 import java.net.InetAddress
 import java.util.concurrent.TimeUnit
 
-class WebsocketSubscriber(port: Int, zookeeper: String = "localhost:2181") {
+class WebsocketSubscriber constructor(val port: Int, client: CuratorFramework){
     val aclient: AsyncCuratorFramework
-    val client: CuratorFramework
-    var subData = KurojiWebsocket.Subscriber.newBuilder()
-            .setHostname(InetAddress.getLocalHost().hostName)
-            .setPort(port)
-    var ourUrl: String? = null
     init {
-        val retryPolicy = ExponentialBackoffRetry(1000, 3)
-        client = CuratorFrameworkFactory.newClient(zookeeper, retryPolicy)
-        client.start()
         try {
             client.blockUntilConnected(30, TimeUnit.SECONDS)
         } catch (ex: InterruptedException) {
@@ -31,6 +23,12 @@ class WebsocketSubscriber(port: Int, zookeeper: String = "localhost:2181") {
         }
         aclient = AsyncCuratorFramework.wrap(client)
     }
+    constructor(port: Int, zookeeper: String = "localhost:2181") : this(port, CuratorFrameworkFactory.newClient(zookeeper, ExponentialBackoffRetry(1000, 3)))
+
+    var subData = KurojiWebsocket.Subscriber.newBuilder()
+            .setHostname(InetAddress.getLocalHost().hostName)
+            .setPort(port)
+    var ourUrl: String? = null
     suspend fun register() {
         ourUrl = aclient.create()
                 .withOptions(setOf(CreateOption.createParentsAsContainers), CreateMode.EPHEMERAL_SEQUENTIAL)
@@ -47,6 +45,5 @@ class WebsocketSubscriber(port: Int, zookeeper: String = "localhost:2181") {
 
     suspend fun shutdown() {
         unregister()
-        aclient.unwrap().close()
     }
 }
